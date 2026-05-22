@@ -8,6 +8,7 @@ import {
 import Link from "next/link";
 import { useLiveData } from "@/hooks/useLiveData";
 import { KPICard } from "@/components/dashboard/KPICard";
+import { AanwezigheidCard } from "@/components/dashboard/AanwezigheidCard";
 import { Panel } from "@/components/shared/Panel";
 import { BarsChart } from "@/components/charts/Charts";
 import { Badge } from "@/components/ui/badge";
@@ -61,6 +62,9 @@ export default function DashboardPage() {
         <KPICard label="Levertijd gemiddeld" value={reading.levertijd} unit="wd" sub="werkdagen" icon={Clock} accent="#d29922" history={hist("levertijd")} />
         <KPICard label="Kwaliteitskeuring" value={reading.kwaliteitGeslaagd} unit="%" digits={1} sub="geslaagd" icon={BadgeCheck} accent="#3fb950" history={hist("kwaliteitGeslaagd")} />
       </div>
+
+      {/* Aanwezigheid op locatie */}
+      <AanwezigheidCard />
 
       <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
         {/* Brand production overview */}

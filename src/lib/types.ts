@@ -243,3 +243,26 @@ export interface FactoryReading {
   // weather (Woerden)
   buitenTemp: number; // °C
 }
+
+// ── Presence / aanwezigheid ──────────────────────────────────────────────────
+
+export type AanwezigheidCategorie = "medewerker" | "extern" | "bezoeker";
+
+export interface AanwezigheidRecord {
+  id: string;
+  categorie: AanwezigheidCategorie;
+  naam?: string; // optional, privacygevoelig — bij voorkeur initialen/functietitel
+  afdeling?: string;
+  type?: string;
+  tijdstip: string; // HH:MM
+  actie: "in" | "uit";
+}
+
+export interface AanwezigheidSummary {
+  medewerkers: { totaal: number; perAfdeling: Record<string, number> };
+  externen: { totaal: number; perType: Record<string, number> };
+  bezoekers: { totaal: number; perType: Record<string, number> };
+  totaalOpLocatie: number;
+  maxCapaciteit: number;
+  log: AanwezigheidRecord[];
+}

@@ -8,11 +8,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { FactoryReading, Alert, Machine, Monteur, Order } from "@/lib/types";
-import { generateReading, initAlerts, maybeNewAlert } from "@/lib/simulation/sensorSimulator";
+import type { FactoryReading, Alert, Machine, Monteur, Order, AanwezigheidSummary } from "@/lib/types";
+import { generateReading, initAlerts, maybeNewAlert, nextAanwezigheidEvent } from "@/lib/simulation/sensorSimulator";
 import { MACHINES, machineStatusKleur } from "@/lib/data/machines";
 import { MONTEURS } from "@/lib/data/monteurs";
 import { ACTIEVE_ORDERS } from "@/lib/data/orders";
+import { AANWEZIGHEID_INIT } from "@/lib/data/facilities";
 import { clamp } from "@/lib/utils";
 
 const HISTORY_LEN = 60;
@@ -26,6 +27,7 @@ interface LiveDataValue {
   machines: Machine[];
   monteurs: Monteur[];
   orders: Order[];
+  aanwezigheid: AanwezigheidSummary;
   ready: boolean;
 }
 
@@ -81,6 +83,7 @@ export function LiveDataProvider({ children }: { children: ReactNode }) {
   const [machines, setMachines] = useState<Machine[]>(MACHINES);
   const [monteurs, setMonteurs] = useState<Monteur[]>(MONTEURS);
   const [orders, setOrders] = useState<Order[]>(ACTIEVE_ORDERS);
+  const [aanwezigheid, setAanwezigheid] = useState<AanwezigheidSummary>(AANWEZIGHEID_INIT);
 
   const prevRef = useRef<FactoryReading | null>(null);
 
@@ -112,6 +115,25 @@ export function LiveDataProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Presence check-in/out events on their own organic cadence (every 30–60s).
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      const delay = 30000 + Math.random() * 30000;
+      timer = setTimeout(() => {
+        if (!active) return;
+        setAanwezigheid((s) => nextAanwezigheidEvent(s, new Date()));
+        schedule();
+      }, delay);
+    };
+    schedule();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, []);
+
   const value: LiveDataValue = {
     reading,
     history,
@@ -119,6 +141,7 @@ export function LiveDataProvider({ children }: { children: ReactNode }) {
     machines,
     monteurs,
     orders,
+    aanwezigheid,
     ready: reading !== null,
   };
 
