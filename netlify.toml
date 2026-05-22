@@ -1,0 +1,17 @@
+# Netlify configuration — QBtec Operations Intelligence (Next.js 14)
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# The Next.js runtime serves every route (incl. /api/scenario) through a single
+# bundled function. The wildcard applies the 26s max timeout to that handler so
+# the scenario route always responds — with a real result or a graceful fallback.
+[functions."*"]
+  timeout = 26
