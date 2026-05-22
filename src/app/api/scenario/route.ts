@@ -6,7 +6,10 @@ import { lokaleAnalyse } from "@/lib/simulation/scenarioEngine";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-7";
+// Default to a fast model so the call completes within tight function windows
+// (Netlify Free/Starter cap at 10s). Override via ANTHROPIC_MODEL when on a plan
+// that allows the 26s timeout (see netlify.toml).
+const MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5";
 const TIMEOUT_MS = Number(process.env.SCENARIO_TIMEOUT_MS) || 20000;
 
 const SYSTEM_PROMPT = `Je bent de AI-analyse-engine van "QBtec Operations Intelligence", het digital-twin platform van QBtec B.V. in Woerden (Nederland). Je analyseert vrij ingevoerde bedrijfsscenario's en berekent de impact over alle operationele domeinen van de fabriek.

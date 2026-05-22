@@ -10,8 +10,12 @@
 [[plugins]]
   package = "@netlify/plugin-nextjs"
 
+# `timeout` is NOT valid directly under [functions]; it must be per-function.
 # The Next.js runtime serves every route (incl. /api/scenario) through a single
-# bundled function. The wildcard applies the 26s max timeout to that handler so
-# the scenario route always responds — with a real result or a graceful fallback.
+# bundled function named "__netlify-handler" — NOT "api/scenario" — so a block
+# keyed to the route path (e.g. [functions."api/scenario"]) matches nothing and
+# does nothing. The wildcard reliably applies the 26s max timeout to that handler.
+# (Requires a plan that allows >10s; Free/Starter are capped at 10s regardless —
+# on those plans use a fast ANTHROPIC_MODEL such as claude-haiku-4-5 to avoid 504.)
 [functions."*"]
   timeout = 26
