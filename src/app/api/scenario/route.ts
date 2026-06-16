@@ -12,9 +12,9 @@ export const maxDuration = 60;
 const MODEL = "claude-haiku-4-5";
 const MAX_TOKENS = 1024;
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-// Bound the call so a slow/hanging upstream fails fast instead of timing out
-// the whole function (Netlify Free/Starter cap at ~10s).
-const TIMEOUT_MS = Number(process.env.SCENARIO_TIMEOUT_MS) || 9000;
+// Bound the call so a slow/hanging upstream fails fast instead of hanging to
+// the gateway limit (Netlify Free/Starter cap at ~10s) → 504.
+const TIMEOUT_MS = Number(process.env.SCENARIO_TIMEOUT_MS) || 8000;
 
 interface AnthropicTool {
   name: string;
@@ -163,6 +163,7 @@ Rapporteer de volledige impact-analyse via de tool.`;
 
     let res: Response;
     try {
+      console.log("scenario: voor Anthropic-aanroep");
       res = await fetch(ANTHROPIC_URL, {
         method: "POST",
         signal: controller.signal,
@@ -180,8 +181,10 @@ Rapporteer de volledige impact-analyse via de tool.`;
           messages: [{ role: "user", content: userText }],
         }),
       });
+      console.log("scenario: na Anthropic-aanroep, status", res.status);
     } catch (netErr) {
       clearTimeout(timer);
+      console.error("scenario fout:", netErr);
       const aborted = netErr instanceof Error && netErr.name === "AbortError";
       return NextResponse.json(
         {
