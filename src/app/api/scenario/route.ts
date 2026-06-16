@@ -1,16 +1,26 @@
 import { NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
 import type { ScenarioAnalyse, ScenarioRequest } from "@/lib/scenario/types";
 import { lokaleAnalyse } from "@/lib/simulation/scenarioEngine";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// Default to a fast model so the call completes within tight function windows
-// (Netlify Free/Starter cap at 10s). Override via ANTHROPIC_MODEL when on a plan
-// that allows the 26s timeout (see netlify.toml).
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5";
-const TIMEOUT_MS = Number(process.env.SCENARIO_TIMEOUT_MS) || 20000;
+// ONE fast model, ONE call — no fallback list. Seven sequential model attempts
+// (several of which 404'd) blew past the Netlify ~10s function timeout → 504.
+// claude-haiku-4-5 is fast and valid; max_tokens stays small so the single call
+// returns well inside the window.
+const MODEL = "claude-haiku-4-5";
+const MAX_TOKENS = 1024;
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+// Bound the call so a slow/hanging upstream fails fast instead of timing out
+// the whole function (Netlify Free/Starter cap at ~10s).
+const TIMEOUT_MS = Number(process.env.SCENARIO_TIMEOUT_MS) || 9000;
+
+interface AnthropicTool {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+}
 
 const SYSTEM_PROMPT = `Je bent de AI-analyse-engine van "QBtec Operations Intelligence", het digital-twin platform van QBtec B.V. in Woerden (Nederland). Je analyseert vrij ingevoerde bedrijfsscenario's en berekent de impact over alle operationele domeinen van de fabriek.
 
@@ -32,7 +42,7 @@ OPDRACHT:
 - De tijdlijn loopt Nu → Maand 3 en toont de operationele stress (0-100) die typisch piekt en daarna afneemt.
 - Rapporteer ALTIJD via de tool 'rapporteer_scenario_analyse'.`;
 
-const TOOL: Anthropic.Tool = {
+const TOOL: AnthropicTool = {
   name: "rapporteer_scenario_analyse",
   description: "Rapporteer de gestructureerde impact-analyse van het scenario voor QBtec.",
   input_schema: {
@@ -126,21 +136,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Beschrijf eerst een scenario." }, { status: 400 });
     }
 
-    if (!process.env.ANTHROPIC_API_KEY) {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      // Niet-geconfigureerd is geen fout: val terug op het lokale model.
       return NextResponse.json({
         ...lokaleAnalyse(scenario, params),
         apiNotice: "ANTHROPIC_API_KEY niet ingesteld — lokaal model gebruikt.",
       });
     }
 
-    try {
-      const client = new Anthropic({
-        apiKey: process.env.ANTHROPIC_API_KEY,
-        timeout: TIMEOUT_MS,
-        maxRetries: 0,
-      });
-
-      const userText = `Analyseer het volgende scenario voor QBtec B.V.
+    const userText = `Analyseer het volgende scenario voor QBtec B.V.
 
 SCENARIO:
 ${scenario}
@@ -152,37 +157,73 @@ PARAMETERS:
 
 Rapporteer de volledige impact-analyse via de tool.`;
 
-      const stream = client.messages.stream({
-        model: MODEL,
-        max_tokens: 8000,
-        system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
-        tools: [TOOL],
-        tool_choice: { type: "tool", name: "rapporteer_scenario_analyse" },
-        messages: [{ role: "user", content: userText }],
-      });
-      const msg = await stream.finalMessage();
+    // ── ÉÉN aanroep, ÉÉN geldig model ──────────────────────────────────────
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
-      const toolBlock = msg.content.find((b) => b.type === "tool_use");
-      if (!toolBlock || toolBlock.type !== "tool_use") {
-        return NextResponse.json({
-          ...lokaleAnalyse(scenario, params),
-          apiNotice: "Claude gaf geen gestructureerd antwoord — lokaal model gebruikt.",
-        });
-      }
-      return NextResponse.json(sanitize(toolBlock.input as Record<string, unknown>));
-    } catch (apiErr) {
-      console.error("Scenario Claude API error:", apiErr);
-      const reden =
-        apiErr instanceof Anthropic.APIError
-          ? `${apiErr.status ?? ""} ${apiErr.message}`.trim()
-          : apiErr instanceof Error
-            ? apiErr.message
-            : "Onbekende fout";
-      return NextResponse.json({
-        ...lokaleAnalyse(scenario, params),
-        apiNotice: `Claude API niet beschikbaar (${reden}) — lokaal model gebruikt.`,
+    let res: Response;
+    try {
+      res = await fetch(ANTHROPIC_URL, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          max_tokens: MAX_TOKENS,
+          system: SYSTEM_PROMPT,
+          tools: [TOOL],
+          tool_choice: { type: "tool", name: "rapporteer_scenario_analyse" },
+          messages: [{ role: "user", content: userText }],
+        }),
       });
+    } catch (netErr) {
+      clearTimeout(timer);
+      const aborted = netErr instanceof Error && netErr.name === "AbortError";
+      return NextResponse.json(
+        {
+          error: aborted
+            ? `Anthropic API reageerde niet binnen ${TIMEOUT_MS} ms.`
+            : `Kon de Anthropic API niet bereiken: ${netErr instanceof Error ? netErr.message : "netwerkfout"}`,
+        },
+        { status: aborted ? 504 : 502 },
+      );
     }
+    clearTimeout(timer);
+
+    // ── Echte HTTP-status + foutmelding van Anthropic teruggeven ───────────
+    // Zo zijn 401 (sleutel), 402 (credits), 404 (model) e.d. herkenbaar.
+    if (!res.ok) {
+      let detail = "";
+      try {
+        const errBody = await res.json();
+        detail = errBody?.error?.message || JSON.stringify(errBody?.error ?? errBody);
+      } catch {
+        detail = (await res.text().catch(() => "")) || res.statusText;
+      }
+      console.error(`Anthropic API ${res.status}: ${detail}`);
+      return NextResponse.json(
+        { error: `Anthropic API ${res.status}: ${detail}` },
+        { status: res.status },
+      );
+    }
+
+    const msg = (await res.json()) as {
+      content?: Array<{ type: string; name?: string; input?: Record<string, unknown> }>;
+    };
+    const toolBlock = msg.content?.find(
+      (b) => b.type === "tool_use" && b.name === "rapporteer_scenario_analyse",
+    );
+    if (!toolBlock?.input) {
+      return NextResponse.json(
+        { error: "Claude gaf geen gestructureerd antwoord (geen tool-aanroep)." },
+        { status: 502 },
+      );
+    }
+    return NextResponse.json(sanitize(toolBlock.input));
   } catch (error) {
     console.error("Scenario API error:", error);
     return NextResponse.json(
