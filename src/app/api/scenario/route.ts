@@ -14,7 +14,7 @@ const MAX_TOKENS = 1024;
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 // Bound the call so a slow/hanging upstream fails fast instead of hanging to
 // the gateway limit (Netlify Free/Starter cap at ~10s) → 504.
-const TIMEOUT_MS = Number(process.env.SCENARIO_TIMEOUT_MS) || 8000;
+const TIMEOUT_MS = Number(process.env.SCENARIO_TIMEOUT_MS) || 9000;
 
 interface AnthropicTool {
   name: string;
@@ -185,14 +185,19 @@ Rapporteer de volledige impact-analyse via de tool.`;
     } catch (netErr) {
       clearTimeout(timer);
       console.error("scenario fout:", netErr);
-      const aborted = netErr instanceof Error && netErr.name === "AbortError";
+      // Trage AI-aanroep: val netjes terug op het lokale model i.p.v. een 504.
+      if (netErr instanceof Error && netErr.name === "AbortError") {
+        return NextResponse.json({
+          ...lokaleAnalyse(scenario, params),
+          apiNotice: "AI-analyse duurde te lang — lokaal model gebruikt.",
+        });
+      }
+      // Echte netwerkfout (geen AbortError): wel een 502 teruggeven.
       return NextResponse.json(
         {
-          error: aborted
-            ? `Anthropic API reageerde niet binnen ${TIMEOUT_MS} ms.`
-            : `Kon de Anthropic API niet bereiken: ${netErr instanceof Error ? netErr.message : "netwerkfout"}`,
+          error: `Kon de Anthropic API niet bereiken: ${netErr instanceof Error ? netErr.message : "netwerkfout"}`,
         },
-        { status: aborted ? 504 : 502 },
+        { status: 502 },
       );
     }
     clearTimeout(timer);
